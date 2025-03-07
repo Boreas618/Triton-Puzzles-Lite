@@ -265,13 +265,18 @@ def add_vec_kernel(x_ptr, y_ptr, z_ptr, N0, N1, B0: tl.constexpr, B1: tl.constex
     pid = tl.program_id(0)
     x_range = tl.arange(0, B0) + pid * B0
     y_range = tl.arange(0, B1) + pid * B1
-    # z_{j, i} = j * B1 + i
-    z_range = y_range[:, None] * B1 + x_range[None, :]
+    
+    x_mask = x_range < N0
+    y_mask = y_range < N1
+    
+    x = tl.load(x_ptr + x_range, x_mask)[None, :]
+    y = tl.load(y_ptr + y_range, y_mask)[:, None]
+    
+    z_range = y_range[:, None] * N1 + x_range[None, :]
+    z_mask = x_mask[None, :] & y_mask[:, None]
 
-    x = tl.load(x_ptr + x_range, x_range < N0)[None, :]
-    y = tl.load(y_ptr + y_range, y_range < N1)[:, None]
     z = x + y
-    tl.store(z_ptr + z_range, z, z_range < B0 * B1)
+    tl.store(z_ptr + z_range, z, z_mask)
     return
 
 
@@ -298,7 +303,34 @@ def add_vec_block_kernel(
 ):
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
-    # Finish me!
+    
+    x_range = tl.arange(0, B0) + block_id_x * B0
+    y_range = tl.arange(0, B1) + block_id_y * B1
+    
+    x_mask = x_range < N0
+    y_mask = y_range < N1
+    
+    x = tl.load(x_ptr + x_range, x_mask)
+    y = tl.load(y_ptr + y_range, y_mask)
+    
+    z_range = x_range[None, :] + y_range[:, None] * N0
+    z_mask = x_mask[None, :] & y_mask[:, None]
+    
+    z = x[None, :] + y[:, None]
+        
+    # Incorrect mask implementation:
+    # tl.store(z_ptr + z_range, z, z_range < N0 * N1)
+    # 
+    # Explanation:
+    # For launch parameters {'N0': 100, 'N1': 90} and {'B0': 32, 'B1': 32},
+    # some indices in the last blocks may exceed valid bounds.
+    # Although invalid indices of x are prevented from loading correctly due
+    # to proper masking (x_mask and y_mask), combinations such as an invalid
+    # index x[101] with a valid index y[1] may incorrectly pass through the
+    # original condition (z_range < N0 * N1), resulting in invalid memory writes.
+    
+    tl.store(z_ptr + z_range, z, z_mask)
+    
     return
 
 
@@ -325,6 +357,20 @@ def mul_relu_block_kernel(
 ):
     block_id_x = tl.program_id(0)
     block_id_y = tl.program_id(1)
+    
+    x_range = tl.arange(0, B0) + block_id_x * B0
+    y_range = tl.arange(0, B1) + block_id_y * B1
+    x_mask = x_range < N0
+    y_mask = y_range < N1
+    x = tl.load(x_ptr + x_range, x_mask)
+    y = tl.load(y_ptr + y_range, y_mask)
+    
+    z = tl.maximum(x[None, :] * y[:, None], 0)
+    z_range = x_range[None, :] + y_range[:, None] * N0
+    z_mask = x_mask[None, :] & y_mask[:, None]
+    
+    tl.store(z_ptr + z_range, z, z_mask)
+    
     # Finish me!
     return
 
